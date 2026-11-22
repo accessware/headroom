@@ -1,0 +1,38 @@
+[Setup]
+	AppName=Headroom
+	AppVersion=@PROJECT_VERSION@
+	AppPublisher=Quin Gillespie
+	AppPublisherURL=https://github.com/accessware/headroom
+	AppSupportURL=https://github.com/accessware/headroom/issues
+	AppUpdatesURL=https://github.com/accessware/headroom/releases
+	DefaultDirName={autopf}\Headroom
+	DisableProgramGroupPage=yes
+	DisableDirPage=yes
+	OutputDir=.
+	OutputBaseFilename=headroom_setup-@ARCH_SUFFIX@
+	Compression=lzma2
+	SolidCompression=yes
+	WizardStyle=modern
+	UninstallDisplayIcon={app}\headroom.exe
+	; Headroom sits in the notification area, so a copy left running is closed rather than failing
+	; to replace headroom.exe.
+	CloseApplications=force
+	ArchitecturesAllowed=@ARCH_ALLOWED@
+	ArchitecturesInstallIn64BitMode=@ARCH_MODE@
+
+[Languages]
+	Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Files]
+	Source: "headroom.exe"; DestDir: "{app}"; Flags: ignoreversion
+
+[Tasks]
+	Name: "desktopicon"; Description: "Desktop Shortcut"
+	Name: "startmenuicon"; Description: "Start Menu Shortcut"; Flags: unchecked
+
+[Icons]
+	Name: "{autodesktop}\Headroom"; Filename: "{app}\headroom.exe"; Tasks: desktopicon
+	Name: "{autoprograms}\Headroom"; Filename: "{app}\headroom.exe"; Tasks: startmenuicon
+
+[Run]
+	Filename: "{app}\headroom.exe"; Description: "Launch Headroom"; Flags: nowait postinstall skipifsilent
