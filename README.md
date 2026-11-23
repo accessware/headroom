@@ -1,10 +1,10 @@
 # Headroom
 
-A small Windows app that reads headset and spare battery levels directly from a SteelSeries Arctis Nova Pro Wireless base station, and reads them to you from anywhere with a hotkey. SteelSeries GG is not required.
+A small Windows app that reads the battery level directly from a SteelSeries Arctis Nova Pro Wireless base station or a Nova 7X dongle, and reads it to you from anywhere with a hotkey. SteelSeries GG is not required.
 
 ## Use
 
-Connect the base station by USB and launch `headroom.exe`. The window shows the headset and dock battery levels, refreshed every five seconds.
+Connect the base station or dongle by USB and launch `headroom.exe`. The window shows the headset battery level, and the spare battery's level for the Nova Pro Wireless, refreshed every five seconds.
 
 - Press Alt+Shift+B from any program to hear the current levels through your screen reader, or a system voice if none is running. Braille displays get them too.
 - Press Escape to hide Headroom in the notification area. Click its icon, choose Show/Hide from its menu, or launch it again, to bring the window back.
@@ -12,15 +12,16 @@ Connect the base station by USB and launch `headroom.exe`. The window shows the 
 - Choose Check for Updates to look for a newer release. Headroom also looks each time it starts, and asks before installing anything.
 - Choose Exit, in the window or the notification area menu, or close the window, to quit.
 
-If the base station is disconnected, the window shows an error and keeps retrying. An offline headset is shown as off or out of range, while the dock reading remains available. If another program already uses the hotkey, Headroom says so when it starts.
+If the base station or dongle is disconnected, the window shows an error and keeps retrying. An offline headset is shown as off or out of range, while the Nova Pro's dock reading remains available. If another program already uses the hotkey, Headroom says so when it starts.
 
 ## Supported hardware
 
 - Tested: Nova Pro Wireless base station, USB vendor/product `1038:12e0`, on Windows x64, including with GG and Engine stopped.
+- Tested: Arctis Nova 7X, USB vendor/product `1038:2206`. It has no spare battery, so only the headset is shown.
 - Recognized but not hardware-tested: Nova Pro Wireless X base station (`1038:12e5`).
-- Other product ids and headset families are not currently supported. If several matching stations are connected, the first accessible status interface is used.
+- Other product ids and headset families are not currently supported, including the other Nova 7 and 7X revisions, some of which report a different battery scale. If several supported devices are connected, the first accessible status interface is used.
 
-The base station reports battery levels in steps of 12.5%, rather than exact percentages. Intermediate values are labeled “About”; 100% means the highest reported step. The dock's charging/charged state is inferred from its level. A zero dock reading is treated as an empty slot, but a very low battery may be indistinguishable from an absent one.
+The Nova Pro base station reports battery levels in steps of 12.5%, and the Nova 7X in steps of 25%, rather than exact percentages. Intermediate values are labeled “About”; 100% means the highest reported step. The Nova Pro dock's charging/charged state is inferred from its level. A zero dock reading is treated as an empty slot, but a very low battery may be indistinguishable from an absent one.
 
 ## Build
 

@@ -45,24 +45,20 @@ fn main() {
 		// Not being able to check for another copy shouldn't stop this one.
 		Err(_) => (),
 	}
-	let latest: Latest = Arc::new(Mutex::new("Headset: Reading…\nDock: Reading…".into()));
+	let latest: Latest = Arc::new(Mutex::new("Headset: Reading…".into()));
 	let stop_poller = spawn_poller(Arc::clone(&latest));
 	let _ = run_app(move |_| app::run(Channels { latest, raise, stop_poller }));
 }
 
-/// Reads the base station on a background thread, so a slow or missing device never blocks the
+/// Reads the headset on a background thread, so a slow or missing device never blocks the
 /// window, and stores each reading in `latest`. Sending on, or dropping, the returned sender
 /// stops the thread.
 fn spawn_poller(latest: Latest) -> Sender<()> {
 	let (stop_tx, stop_rx) = mpsc::channel::<()>();
 	thread::spawn(move || {
 		loop {
-			let text = read_battery().map_or_else(
-				|error| {
-					format!("Headset: Unavailable — {error:#}\nDock: Unavailable — check the base station connection")
-				},
-				|battery| battery.to_string(),
-			);
+			let text = read_battery()
+				.map_or_else(|error| format!("Headset: Unavailable — {error:#}"), |battery| battery.to_string());
 			*latest.lock().unwrap_or_else(PoisonError::into_inner) = text;
 			if !matches!(stop_rx.recv_timeout(POLL_INTERVAL), Err(RecvTimeoutError::Timeout)) {
 				break;

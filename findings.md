@@ -1,6 +1,8 @@
 # Direct USB battery protocol
 
-Headroom queries the base station over Windows HID. It does not need SteelSeries GG, Engine, a local HTTP API, or a custom USB driver.
+Headroom queries the base station or dongle over Windows HID. It does not need SteelSeries GG, Engine, a local HTTP API, or a custom USB driver.
+
+Each supported headset family is a profile in `src/battery.rs`: its product ids, USB interface, report size, query header, and decoder. The sections below describe the Nova Pro Wireless; [the Nova 7X](#arctis-nova-7x) follows them.
 
 ## Find the status interface
 
@@ -60,9 +62,29 @@ After the user quit GG, process enumeration found neither GG nor Engine running.
 
 Intermediate dock levels, removal/reinsertion, headset-off behavior, and the X variant have parser coverage or protocol references, but were not physically exercised during this session. They remain useful hardware checks for future contributors.
 
+## Arctis Nova 7X
+
+Vendor `1038`, product `2206`, USB interface `03`, usage page `0xffc0`, usage `1`. Reports are 65 bytes as Windows sees them: a report id of `00` (the device doesn't use ids) followed by a 64-byte payload.
+
+Write `00 B0 00 ...` (65 bytes) and read until a report starting `00 B0` arrives, with the same 1.5-second deadline as above. Offsets are zero-based in the 65-byte report:
+
+| Offset | Meaning |
+| --- | --- |
+| 0 | Report id `00` |
+| 1 | Status command `B0` |
+| 3 | Headset battery level, 0–4 (0, 25, 50, 75, 100%) |
+| 4 | Headset state |
+
+Known states: `00` offline (the level isn't shown or validated), `01` and `02` charging, `03` on battery. Anything else is displayed as unavailable with its raw code. There is no spare battery.
+
+Verified on 2026-11-22 with a `1038:2206` dongle. The reply was `00 b0 03 03 03 64 64 00 00 00 2e 30 30 ...`. The headset was at 75% and not charging, as GG showed, so level `03` is 75% on this scale. Bytes 5 and 6 (`64 64`) are not decoded. The rest of the reply looks like an ASCII firmware version. Charging, offline, and other charge levels have parser coverage only.
+
+HeadsetControl lists other Nova 7 and 7X product ids (`22a4` with the same discrete scale, `22a5`, `2258`, `229e`, `22ad` and others with a direct 0–100 percentage). Headroom recognizes only `2206`, until those are verified on hardware.
+
 ## References
 
 - [HeadsetControl device protocol](https://github.com/Sapd/HeadsetControl/blob/master/lib/devices/steelseries_arctis_nova_pro_wireless.hpp): product ids, interface number, status request, headset battery scale and state codes.
+- [HeadsetControl Nova 7 protocol](https://github.com/Sapd/HeadsetControl/blob/master/lib/devices/steelseries_arctis_nova_7.hpp): the Nova 7 and 7X product ids, interface number, status request, and battery scales.
 - [HeadsetBatteryTray protocol notes](https://github.com/Teknesyum/HeadsetBatteryTray#how-it-works): Windows collection selection and report format.
 - [Rigstats control architecture notes](https://github.com/dvalfrid/rigstats/blob/main/docs/control-architecture.md): spare battery byte and scale, marked unverified there.
 

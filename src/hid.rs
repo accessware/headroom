@@ -1,4 +1,4 @@
-//! Windows HID transport. Only the 06 B0 status query is sent to the base station.
+//! Windows HID transport. Only the B0 status query is sent to the headset's base station or dongle.
 
 use std::{
 	io::Error,
@@ -38,15 +38,10 @@ use windows_sys::{
 	core::GUID,
 };
 
-use crate::battery::{Battery, STATUS_HEADER};
+use crate::battery::{Battery, PROFILES, Profile};
 
-const VENDOR_ID: u16 = 0x1038;
-/// Nova Pro Wireless and Nova Pro Wireless X base stations.
-const PRODUCT_IDS: [u16; 2] = [0x12e0, 0x12e5];
-/// The USB interface that carries the status collection.
-const INTERFACE: &str = "mi_04";
-const STATUS_USAGE_PAGE: u16 = 0xffc0;
-const REPORT_LEN: usize = 64;
+/// The longest report any profile uses.
+const MAX_REPORT_LEN: usize = 65;
 const IO_TIMEOUT: Duration = Duration::from_millis(1500);
 
 struct DeviceSet(HDEVINFO);
@@ -73,12 +68,12 @@ fn open(path: &[u16], access: u32, flags: u32) -> Result<OwnedHandle> {
 	let handle = unsafe {
 		CreateFileW(path.as_ptr(), access, FILE_SHARE_READ | FILE_SHARE_WRITE, null(), OPEN_EXISTING, flags, null_mut())
 	};
-	ensure!(handle != INVALID_HANDLE_VALUE, "Could not open the base station: {}", Error::last_os_error());
+	ensure!(handle != INVALID_HANDLE_VALUE, "Could not open the headset: {}", Error::last_os_error());
 	// SAFETY: CreateFileW succeeded and ownership is transferred exactly once.
 	Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
-fn is_status_interface(path: &[u16]) -> Result<bool> {
+fn is_status_interface(path: &[u16], profile: &Profile) -> Result<bool> {
 	let handle = open(path, 0, 0)?;
 	// SAFETY: these are plain Windows output structures whose fields accept zero initialization.
 	let mut attributes: HIDD_ATTRIBUTES = unsafe { zeroed() };
@@ -87,7 +82,7 @@ fn is_status_interface(path: &[u16]) -> Result<bool> {
 	if !unsafe { HidD_GetAttributes(handle.as_raw_handle(), &raw mut attributes) } {
 		return Err(Error::last_os_error()).context("Could not read HID device attributes");
 	}
-	if attributes.VendorID != VENDOR_ID || !PRODUCT_IDS.contains(&attributes.ProductID) {
+	if attributes.VendorID != profile.vendor_id || !profile.product_ids.contains(&attributes.ProductID) {
 		return Ok(false);
 	}
 	let mut data = 0;
@@ -101,8 +96,8 @@ fn is_status_interface(path: &[u16]) -> Result<bool> {
 	// SAFETY: the preparsed data allocation and output buffer are alive during this call.
 	let result = unsafe { HidP_GetCaps(data.0, &raw mut caps) };
 	ensure!(result == HIDP_STATUS_SUCCESS, "Could not decode HID capabilities");
-	let report_len = u16::try_from(REPORT_LEN)?;
-	Ok(caps.UsagePage == STATUS_USAGE_PAGE
+	let report_len = u16::try_from(profile.report_len)?;
+	Ok(caps.UsagePage == profile.usage_page
 		&& caps.Usage == 1
 		&& caps.InputReportByteLength == report_len
 		&& caps.OutputReportByteLength == report_len)
@@ -130,11 +125,16 @@ fn interface_path(set: &DeviceSet, interface: &SP_DEVICE_INTERFACE_DATA) -> Resu
 	Ok(path[..=end].to_vec())
 }
 
-fn is_candidate_path(lowercase_path: &str) -> bool {
-	PRODUCT_IDS.iter().any(|pid| lowercase_path.contains(&format!("vid_{VENDOR_ID:04x}&pid_{pid:04x}&{INTERFACE}")))
+/// The profile whose status interface this device path names, if any.
+fn candidate_profile(lowercase_path: &str) -> Option<&'static Profile> {
+	PROFILES.into_iter().find(|profile| {
+		profile.product_ids.iter().any(|pid| {
+			lowercase_path.contains(&format!("vid_{:04x}&pid_{pid:04x}&{}", profile.vendor_id, profile.interface))
+		})
+	})
 }
 
-fn find_base_station() -> Result<OwnedHandle> {
+fn find_headset() -> Result<(OwnedHandle, &'static Profile)> {
 	let mut guid = GUID::default();
 	// SAFETY: guid points to writable storage for the HID interface class GUID.
 	unsafe { HidD_GetHidGuid(&raw mut guid) };
@@ -158,12 +158,12 @@ fn find_base_station() -> Result<OwnedHandle> {
 		}
 		let path = interface_path(&set, &interface)?;
 		let name = String::from_utf16_lossy(&path).to_ascii_lowercase();
-		// Only probe the known base stations' status interface.
-		if !is_candidate_path(&name) {
+		// Only probe the known headsets' status interface.
+		let Some(profile) = candidate_profile(&name) else {
 			continue;
-		}
-		match is_status_interface(&path) {
-			Ok(true) => return open(&path, GENERIC_READ | GENERIC_WRITE, FILE_FLAG_OVERLAPPED),
+		};
+		match is_status_interface(&path, profile) {
+			Ok(true) => return Ok((open(&path, GENERIC_READ | GENERIC_WRITE, FILE_FLAG_OVERLAPPED)?, profile)),
 			Ok(false) => (),
 			Err(error) => last_error = Some(error),
 		}
@@ -171,10 +171,10 @@ fn find_base_station() -> Result<OwnedHandle> {
 	if let Some(error) = last_error {
 		return Err(error);
 	}
-	bail!("Arctis Nova Pro Wireless base station is not connected")
+	bail!("No supported SteelSeries headset is connected")
 }
 
-fn transfer(handle: &OwnedHandle, buffer: &mut [u8; REPORT_LEN], write: bool, timeout: Duration) -> Result<usize> {
+fn transfer(handle: &OwnedHandle, buffer: &mut [u8], write: bool, timeout: Duration) -> Result<usize> {
 	// SAFETY: create a private manual-reset event with no name or security attributes.
 	let event = unsafe { CreateEventW(null(), 1, 0, null()) };
 	ensure!(!event.is_null(), "Could not create a HID I/O event: {}", Error::last_os_error());
@@ -182,7 +182,7 @@ fn transfer(handle: &OwnedHandle, buffer: &mut [u8; REPORT_LEN], write: bool, ti
 	let event = unsafe { OwnedHandle::from_raw_handle(event) };
 	// SAFETY: OVERLAPPED accepts zero initialization; hEvent is kept alive until completion.
 	let mut operation = OVERLAPPED { hEvent: event.as_raw_handle(), ..unsafe { zeroed() } };
-	let length = u32::try_from(REPORT_LEN)?;
+	let length = u32::try_from(buffer.len())?;
 	let mut count = 0;
 	// SAFETY: handle was opened for overlapped I/O, buffer and operation remain alive
 	// until completion (including cancellation), and count is a writable DWORD.
@@ -210,7 +210,7 @@ fn transfer(handle: &OwnedHandle, buffer: &mut [u8; REPORT_LEN], write: bool, ti
 				GetOverlappedResult(handle.as_raw_handle(), &raw const operation, &raw mut count, 1);
 			}
 			if wait == WAIT_TIMEOUT {
-				bail!("Base station status request timed out");
+				bail!("Headset status request timed out");
 			}
 			return Err(error).context("Could not wait for the HID transfer");
 		}
@@ -223,37 +223,51 @@ fn transfer(handle: &OwnedHandle, buffer: &mut [u8; REPORT_LEN], write: bool, ti
 }
 
 pub fn read_battery() -> Result<Battery> {
-	let handle = find_base_station()?;
-	let mut request = [0; REPORT_LEN];
-	request[..2].copy_from_slice(&STATUS_HEADER);
-	ensure!(transfer(&handle, &mut request, true, IO_TIMEOUT)? == REPORT_LEN, "Incomplete HID status request");
+	let (handle, profile) = find_headset()?;
+	let mut request = [0; MAX_REPORT_LEN];
+	let request = &mut request[..profile.report_len];
+	request[..2].copy_from_slice(&profile.header);
+	ensure!(transfer(&handle, request, true, IO_TIMEOUT)? == profile.report_len, "Incomplete HID status request");
 	let deadline = Instant::now() + IO_TIMEOUT;
 	loop {
 		let remaining = deadline.saturating_duration_since(Instant::now());
-		ensure!(!remaining.is_zero(), "Base station did not return a matching status report");
-		let mut report = [0; REPORT_LEN];
-		let length = transfer(&handle, &mut report, false, remaining)?;
+		ensure!(!remaining.is_zero(), "Headset did not return a matching status report");
+		let mut report = [0; MAX_REPORT_LEN];
+		let report = &mut report[..profile.report_len];
+		let length = transfer(&handle, report, false, remaining)?;
 		ensure!(length <= report.len(), "Invalid HID report length");
-		if report[..length].starts_with(&STATUS_HEADER) {
-			return Battery::from_report(&report[..length]);
+		if report[..length].starts_with(&profile.header) {
+			return profile.decode(&report[..length]);
 		}
 	}
 }
 
 #[cfg(test)]
 mod tests {
-	use super::{is_candidate_path, read_battery};
+	use std::ptr;
 
-	#[test]
-	fn only_the_status_interface_of_known_stations_is_probed() {
-		assert!(is_candidate_path(r"\\?\hid#vid_1038&pid_12e0&mi_04#7&1a2b&0&0000#{4d1e55b2}"));
-		assert!(is_candidate_path(r"\\?\hid#vid_1038&pid_12e5&mi_04#7&1a2b&0&0000#{4d1e55b2}"));
-		assert!(!is_candidate_path(r"\\?\hid#vid_1038&pid_12e0&mi_03#7&1a2b&0&0000#{4d1e55b2}"));
-		assert!(!is_candidate_path(r"\\?\hid#vid_1038&pid_1234&mi_04#7&1a2b&0&0000#{4d1e55b2}"));
+	use super::{candidate_profile, read_battery};
+	use crate::battery::{NOVA_7X, NOVA_PRO_WIRELESS, Profile};
+
+	fn matches(path: &str, expected: Option<&Profile>) -> bool {
+		match (candidate_profile(path), expected) {
+			(Some(found), Some(expected)) => ptr::eq(found, expected),
+			(found, expected) => found.is_none() && expected.is_none(),
+		}
 	}
 
 	#[test]
-	#[ignore = "Requires a connected Nova Pro Wireless base station"]
+	fn only_the_status_interface_of_known_devices_is_probed() {
+		assert!(matches(r"\\?\hid#vid_1038&pid_12e0&mi_04#7&1a2b&0&0000#{4d1e55b2}", Some(&NOVA_PRO_WIRELESS)));
+		assert!(matches(r"\\?\hid#vid_1038&pid_12e5&mi_04#7&1a2b&0&0000#{4d1e55b2}", Some(&NOVA_PRO_WIRELESS)));
+		assert!(matches(r"\\?\hid#vid_1038&pid_2206&mi_03#7&1a2b&0&0000#{4d1e55b2}", Some(&NOVA_7X)));
+		assert!(matches(r"\\?\hid#vid_1038&pid_12e0&mi_03#7&1a2b&0&0000#{4d1e55b2}", None));
+		assert!(matches(r"\\?\hid#vid_1038&pid_2206&mi_04#7&1a2b&0&0000#{4d1e55b2}", None));
+		assert!(matches(r"\\?\hid#vid_1038&pid_1234&mi_04#7&1a2b&0&0000#{4d1e55b2}", None));
+	}
+
+	#[test]
+	#[ignore = "Requires a connected supported headset"]
 	fn live_hid_status() {
 		println!("{}", read_battery().expect("Direct HID battery query failed"));
 	}
