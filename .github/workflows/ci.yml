@@ -1,10 +1,11 @@
 name: CI
 
-# Tags are built by the release workflow, so CI only runs for branches and pull requests.
+# Tags are built by the release workflow. Other branches are covered by their pull requests, since running on
+# their pushes too would test every commit twice.
 on:
   push:
     branches:
-      - '**'
+      - main
   pull_request:
   workflow_dispatch:
 
