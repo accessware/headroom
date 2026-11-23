@@ -165,7 +165,7 @@ pub fn run(channels: Channels) {
 
 /// Laid out with the hint it starts with, so the window is sized to fit it.
 fn lay_out(status: &str, hint: &str) -> Controls {
-	let frame = Frame::builder().with_title(&format!("{APP_NAME} — Arctis Nova Pro Wireless")).build();
+	let frame = Frame::builder().with_title(&format!("{APP_NAME} — SteelSeries headset")).build();
 	let panel = Panel::builder(&frame).build();
 	let sizer = BoxSizer::builder(Orientation::Vertical).build();
 	let field = TextCtrl::builder(&panel)
