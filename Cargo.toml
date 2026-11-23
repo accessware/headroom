@@ -11,32 +11,25 @@ include = ["src/**", "build.rs", "headroom.iss.in", "CHANGELOG.md", "Cargo.toml"
 
 [dependencies]
 anyhow = "1.0.104"
-# A second launch brings the open window to the front instead of opening another.
 doorbell = "0.1.2"
-# Where the config file lives: beside the executable when portable, in %APPDATA% when installed.
 homeport = "0.1.0"
 key-chord = "0.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 ship-shape = "0.6.1"
 toml = "1.2.2"
-# The system-wide hotkey and the dialog that changes it.
 wx-utils = { version = "0.5.3", features = ["global-hotkeys", "shortcuts", "tray"] }
 wxdragon = { version = "0.9.25", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-# Speaks the battery status through the screen reader, or a system voice, from anywhere.
 prismer = { version = "0.1.7", features = ["static"] }
 windows-sys = { version = "0.61.2", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading"] }
 
 [build-dependencies]
-# The application manifest and the version information Explorer shows.
 shipfitter = { version = "0.2.5", default-features = false, features = ["windows-resources"] }
 
 [workspace]
 members = ["xtask"]
 
-# The same policy as the other Accessware apps. Warnings are not denied here, so a newer compiler's
-# new lint can't break a build from source; CI denies them instead.
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
