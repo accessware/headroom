@@ -51,8 +51,9 @@ struct App {
 	visibility: Rc<Visibility>,
 	/// Kept for as long as the icon is up.
 	tray: OnceCell<Tray>,
-	/// Exit was chosen while a dialog was open. The dialog was asked to close, and the window
-	/// closes once it has, since closing it under a modal dialog upsets wxWidgets.
+	/// Exit was chosen from the tray menu, or while a dialog was open. The UI timer closes the
+	/// window on its next tick, after the menu has returned and once no dialog is open, since
+	/// closing it under a modal dialog upsets wxWidgets.
 	exiting: Cell<bool>,
 	config: RefCell<Config>,
 	hotkeys: RefCell<Option<GlobalHotkeys>>,
@@ -93,9 +94,11 @@ pub fn run(channels: Channels) {
 		.on_click(move || clicked.come_forward())
 		.on_show_hide(move || menu.show_or_hide())
 		.build(&app.frame);
+	// Closing the window removes the tray icon, which can't happen inside the icon's own menu
+	// handler without a crash. The timer exits instead, once the menu has returned.
 	tray.on_exit({
 		let app = Rc::downgrade(&app);
-		move || with(&app, App::exit)
+		move || with(&app, |app| app.exiting.set(true))
 	});
 	let _ = app.tray.set(tray);
 	let missed = app.register_hotkey();

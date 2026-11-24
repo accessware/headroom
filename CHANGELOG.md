@@ -5,7 +5,9 @@ Each release's notes are the section under its version, which the release workfl
 ## Unreleased
 
 - Supports the Arctis Nova 7X (`1038:2206`), showing its headset battery level.
+- Supports the Arctis Nova Elite (`1038:2244`), showing its headset and spare battery levels as exact percentages.
 - The window no longer shows a Dock line for headsets that have no spare battery, or while no headset is connected.
+- Choosing Exit from the notification area menu no longer crashes Headroom.
 
 ## 0.1.0
 

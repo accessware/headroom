@@ -247,7 +247,7 @@ mod tests {
 	use std::ptr;
 
 	use super::{candidate_profile, read_battery};
-	use crate::battery::{NOVA_7X, NOVA_PRO_WIRELESS, Profile};
+	use crate::battery::{NOVA_7X, NOVA_ELITE, NOVA_PRO_WIRELESS, Profile};
 
 	fn matches(path: &str, expected: Option<&Profile>) -> bool {
 		match (candidate_profile(path), expected) {
@@ -264,6 +264,11 @@ mod tests {
 		assert!(matches(r"\\?\hid#vid_1038&pid_12e0&mi_03#7&1a2b&0&0000#{4d1e55b2}", None));
 		assert!(matches(r"\\?\hid#vid_1038&pid_2206&mi_04#7&1a2b&0&0000#{4d1e55b2}", None));
 		assert!(matches(r"\\?\hid#vid_1038&pid_1234&mi_04#7&1a2b&0&0000#{4d1e55b2}", None));
+		// Both of the Elite's vendor collections are candidates; their capabilities pick col01.
+		assert!(matches(r"\\?\hid#vid_1038&pid_2244&mi_03&col01#9&1791&0&0000#{4d1e55b2}", Some(&NOVA_ELITE)));
+		assert!(matches(r"\\?\hid#vid_1038&pid_2244&mi_03&col02#9&1791&0&0001#{4d1e55b2}", Some(&NOVA_ELITE)));
+		assert!(matches(r"\\?\hid#vid_1038&pid_2270&mi_03&col01#9&1791&0&0000#{4d1e55b2}", Some(&NOVA_ELITE)));
+		assert!(matches(r"\\?\hid#vid_1038&pid_2244&mi_04#9&3b68&0&0000#{4d1e55b2}", None));
 	}
 
 	#[test]

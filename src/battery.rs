@@ -54,10 +54,23 @@ pub static NOVA_7X: Profile = Profile {
 	decode: decode_nova_7x,
 };
 
-pub static PROFILES: [&Profile; 2] = [&NOVA_PRO_WIRELESS, &NOVA_7X];
+/// The Nova Elite base station reports the headset and a spare battery in its charger, as exact
+/// percentages, in the same report layout as the Nova Pro's.
+pub static NOVA_ELITE: Profile = Profile {
+	vendor_id: 0x1038,
+	product_ids: &[0x2244, 0x2270],
+	interface: "mi_03",
+	usage_page: 0xffc0,
+	report_len: 64,
+	header: [0x01, 0xb0],
+	min_len: 16,
+	decode: decode_nova_elite,
+};
 
-/// The Nova Pro's dock battery scale.
-const DOCK_FULL_STEP: u8 = 8;
+pub static PROFILES: [&Profile; 3] = [&NOVA_PRO_WIRELESS, &NOVA_7X, &NOVA_ELITE];
+
+/// The Nova Pro's battery scale, for the headset and its dock.
+const NOVA_PRO_FULL_STEP: u8 = 8;
 
 #[derive(Debug, PartialEq, Eq)]
 enum State {
@@ -72,25 +85,48 @@ pub struct Battery {
 	headset_percent: u8,
 	headset_state: State,
 	/// The spare battery's level, for headsets that have a dock.
-	dock_step: Option<u8>,
+	dock_percent: Option<u8>,
+	/// The levels are exact percentages, rather than converted from a coarse scale of steps.
+	exact: bool,
+}
+
+/// A level on a scale of `0..=full` steps as a percentage, rounded down.
+fn step_percent(step: u8, full: u8) -> u8 {
+	u8::try_from(u16::from(step) * 100 / u16::from(full)).unwrap_or(100)
+}
+
+/// The headset state byte shared by the Nova Pro and Nova Elite base stations.
+const fn base_station_state(state: u8) -> State {
+	match state {
+		0x01 => State::Offline,
+		0x02 => State::Charging,
+		0x08 => State::OnBattery,
+		state => State::Unknown(state),
+	}
 }
 
 fn decode_nova_pro(report: &[u8]) -> Result<Battery> {
 	let (headset_step, dock_step, state) = (report[6], report[7], report[15]);
 	ensure!(
-		headset_step <= DOCK_FULL_STEP && dock_step <= DOCK_FULL_STEP,
+		headset_step <= NOVA_PRO_FULL_STEP && dock_step <= NOVA_PRO_FULL_STEP,
 		"Base station returned an unsupported battery level"
 	);
-	let headset_state = match state {
-		0x01 => State::Offline,
-		0x02 => State::Charging,
-		0x08 => State::OnBattery,
-		state => State::Unknown(state),
-	};
 	Ok(Battery {
-		headset_percent: u8::try_from(u16::from(headset_step) * 100 / u16::from(DOCK_FULL_STEP))?,
-		headset_state,
-		dock_step: Some(dock_step),
+		headset_percent: step_percent(headset_step, NOVA_PRO_FULL_STEP),
+		headset_state: base_station_state(state),
+		dock_percent: Some(step_percent(dock_step, NOVA_PRO_FULL_STEP)),
+		exact: false,
+	})
+}
+
+fn decode_nova_elite(report: &[u8]) -> Result<Battery> {
+	let (headset_percent, dock_percent, state) = (report[6], report[7], report[15]);
+	ensure!(headset_percent <= 100 && dock_percent <= 100, "Base station returned an unsupported battery level");
+	Ok(Battery {
+		headset_percent,
+		headset_state: base_station_state(state),
+		dock_percent: Some(dock_percent),
+		exact: true,
 	})
 }
 
@@ -107,16 +143,20 @@ fn decode_nova_7x(report: &[u8]) -> Result<Battery> {
 	if headset_state != State::Offline {
 		ensure!(step <= FULL_STEP, "Headset returned an unsupported battery level");
 	}
-	let headset_percent = u8::try_from(u16::from(step.min(FULL_STEP)) * 100 / u16::from(FULL_STEP))?;
-	Ok(Battery { headset_percent, headset_state, dock_step: None })
+	Ok(Battery {
+		headset_percent: step_percent(step.min(FULL_STEP), FULL_STEP),
+		headset_state,
+		dock_percent: None,
+		exact: false,
+	})
 }
 
 impl Battery {
 	pub fn headset(&self) -> String {
 		match self.headset_state {
 			State::Offline => "Off or out of range".into(),
-			State::Charging => format!("{} — Charging", percentage(self.headset_percent)),
-			State::OnBattery => format!("{} — On battery", percentage(self.headset_percent)),
+			State::Charging => format!("{} — Charging", self.percentage(self.headset_percent)),
+			State::OnBattery => format!("{} — On battery", self.percentage(self.headset_percent)),
 			State::Unknown(state) => format!("Unavailable — unknown connection state (0x{state:02x})"),
 		}
 	}
@@ -124,14 +164,16 @@ impl Battery {
 	/// As in GG, a zero spare reading is treated as an empty charging slot, and the charging
 	/// state is inferred from the level: the headset's state byte doesn't apply to the spare.
 	pub fn dock(&self) -> Option<String> {
-		self.dock_step.map(|step| match step {
+		self.dock_percent.map(|percent| match percent {
 			0 => "No battery detected".into(),
-			DOCK_FULL_STEP => "100% — Charged".into(),
-			step => format!(
-				"{} — Charging",
-				percentage(u8::try_from(u16::from(step) * 100 / u16::from(DOCK_FULL_STEP)).unwrap_or(100))
-			),
+			100 => "100% — Charged".into(),
+			percent => format!("{} — Charging", self.percentage(percent)),
 		})
+	}
+
+	/// A level converted from steps is labeled "About", except the highest step.
+	fn percentage(&self, percent: u8) -> String {
+		if self.exact || percent == 100 { format!("{percent}%") } else { format!("About {percent}%") }
 	}
 }
 
@@ -145,13 +187,9 @@ impl Display for Battery {
 	}
 }
 
-fn percentage(percent: u8) -> String {
-	if percent == 100 { "100%".into() } else { format!("About {percent}%") }
-}
-
 #[cfg(test)]
 mod tests {
-	use super::{NOVA_7X, NOVA_PRO_WIRELESS};
+	use super::{NOVA_7X, NOVA_ELITE, NOVA_PRO_WIRELESS};
 
 	fn nova_pro(headset: u8, dock: u8, state: u8) -> [u8; 64] {
 		let mut bytes = [0; 64];
@@ -201,6 +239,25 @@ mod tests {
 		for step in 9..=u8::MAX {
 			assert!(NOVA_PRO_WIRELESS.decode(&nova_pro(step, 8, 8)).is_err());
 			assert!(NOVA_PRO_WIRELESS.decode(&nova_pro(8, step, 8)).is_err());
+		}
+	}
+
+	#[test]
+	fn labels_every_nova_pro_step_as_approximate_except_the_highest() {
+		for (step, headset, dock) in [
+			(0, "About 0% — On battery", "No battery detected"),
+			(1, "About 12% — On battery", "About 12% — Charging"),
+			(2, "About 25% — On battery", "About 25% — Charging"),
+			(3, "About 37% — On battery", "About 37% — Charging"),
+			(4, "About 50% — On battery", "About 50% — Charging"),
+			(5, "About 62% — On battery", "About 62% — Charging"),
+			(6, "About 75% — On battery", "About 75% — Charging"),
+			(7, "About 87% — On battery", "About 87% — Charging"),
+			(8, "100% — On battery", "100% — Charged"),
+		] {
+			let battery = NOVA_PRO_WIRELESS.decode(&nova_pro(step, step, 8)).unwrap();
+			assert_eq!(battery.headset(), headset);
+			assert_eq!(battery.dock().unwrap(), dock);
 		}
 	}
 
@@ -272,5 +329,67 @@ mod tests {
 		bytes[0] = 0;
 		bytes[1] = 0x20;
 		assert!(NOVA_7X.decode(&bytes).is_err());
+	}
+
+	fn nova_elite(headset: u8, dock: u8, state: u8) -> [u8; 64] {
+		let mut bytes = [0; 64];
+		bytes[..2].copy_from_slice(&NOVA_ELITE.header);
+		bytes[6] = headset;
+		bytes[7] = dock;
+		bytes[15] = state;
+		bytes
+	}
+
+	#[test]
+	fn decodes_the_live_nova_elite_reports() {
+		// Replies from a Nova Elite (1038:2244), captured with the headset on and then off.
+		let on = [0x01, 0xb0, 0, 0, 1, 0, 0x59, 0x64, 8, 0, 0, 0x0a, 0, 0, 8, 8, 3];
+		assert_eq!(NOVA_ELITE.decode(&on).unwrap().to_string(), "Headset: 89% — On battery\nDock: 100% — Charged");
+		let charging_spare = [0x01, 0xb0, 0, 0, 1, 0, 0x64, 0x57, 8, 0, 0, 0x0a, 0, 0, 8, 8, 3];
+		assert_eq!(
+			NOVA_ELITE.decode(&charging_spare).unwrap().to_string(),
+			"Headset: 100% — On battery\nDock: 87% — Charging"
+		);
+		let off = [0x01, 0xb0, 0, 0, 1, 0, 0, 0x64, 8, 0, 0, 0x0a, 0, 0, 4, 1, 3];
+		assert_eq!(NOVA_ELITE.decode(&off).unwrap().to_string(), "Headset: Off or out of range\nDock: 100% — Charged");
+	}
+
+	#[test]
+	fn nova_elite_levels_are_exact() {
+		for percent in [1, 12, 37, 50, 99] {
+			let battery = NOVA_ELITE.decode(&nova_elite(percent, percent, 8)).unwrap();
+			assert_eq!(battery.headset(), format!("{percent}% — On battery"));
+			assert_eq!(battery.dock().unwrap(), format!("{percent}% — Charging"));
+		}
+		assert_eq!(NOVA_ELITE.decode(&nova_elite(0, 0, 8)).unwrap().dock().unwrap(), "No battery detected");
+	}
+
+	#[test]
+	fn validates_nova_elite_percentages() {
+		for percent in 0..=100 {
+			assert!(NOVA_ELITE.decode(&nova_elite(percent, percent, 8)).is_ok());
+		}
+		for percent in 101..=u8::MAX {
+			assert!(NOVA_ELITE.decode(&nova_elite(percent, 100, 8)).is_err());
+			assert!(NOVA_ELITE.decode(&nova_elite(100, percent, 8)).is_err());
+		}
+	}
+
+	#[test]
+	fn rejects_truncated_and_unrelated_nova_elite_reports() {
+		for length in 0..16 {
+			assert!(NOVA_ELITE.decode(&nova_elite(100, 100, 8)[..length]).is_err());
+		}
+		// The Nova Pro's report id, and the base station's event reports, aren't status replies.
+		for header in [[0x06, 0xb0], [0x07, 0xb7], [0x01, 0x10]] {
+			let mut bytes = nova_elite(100, 100, 8);
+			bytes[..2].copy_from_slice(&header);
+			assert!(NOVA_ELITE.decode(&bytes).is_err());
+		}
+	}
+
+	#[test]
+	fn unknown_nova_elite_state_is_not_presented_as_a_connected_headset() {
+		assert!(NOVA_ELITE.decode(&nova_elite(100, 100, 0xff)).unwrap().headset().contains("unknown connection state"));
 	}
 }
