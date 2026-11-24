@@ -2,7 +2,7 @@
 name = "headroom"
 version = "0.1.0"
 edition = "2024"
-description = "Reads the SteelSeries Arctis Nova Pro Wireless battery levels, from a window or a hotkey, without SteelSeries GG"
+description = "Reads SteelSeries Arctis Nova Pro Wireless, Nova Elite and Nova 7X battery levels, from a window or a hotkey, without SteelSeries GG"
 license = "MIT"
 authors = ["Quin Gillespie"]
 repository = "https://github.com/accessware/headroom"
