@@ -2,7 +2,7 @@
 
 Headroom queries the base station or dongle over Windows HID. It does not need SteelSeries GG, Engine, a local HTTP API, or a custom USB driver.
 
-Each supported headset family is a profile in `src/battery.rs`: its product ids, USB interface, report size, query header, and decoder. The sections below describe the Nova Pro Wireless; [the Nova 7X](#arctis-nova-7x) follows them.
+Each supported headset family is a profile in `src/battery.rs`: its product ids, USB interface, report size, query header, and decoder. The sections below describe the Nova Pro Wireless; [the Nova 7X](#arctis-nova-7x) and [the Nova Elite](#arctis-nova-elite) follow them.
 
 ## Find the status interface
 
@@ -80,6 +80,34 @@ Known states: `00` offline (the level isn't shown or validated), `01` and `02` c
 Verified on 2026-11-22 with a `1038:2206` dongle. The reply was `00 b0 03 03 03 64 64 00 00 00 2e 30 30 ...`. The headset was at 75% and not charging, as GG showed, so level `03` is 75% on this scale. Bytes 5 and 6 (`64 64`) are not decoded. The rest of the reply looks like an ASCII firmware version. Charging, offline, and other charge levels have parser coverage only.
 
 HeadsetControl lists other Nova 7 and 7X product ids (`22a4` with the same discrete scale, `22a5`, `2258`, `229e`, `22ad` and others with a direct 0–100 percentage). Headroom recognizes only `2206`, until those are verified on hardware.
+
+## Arctis Nova Elite
+
+Vendor `1038`, product `2244` (`2270` for the Sage & Gold edition, untested), USB interface `03`. That interface has two vendor collections. `col01` has usage page `0xffc0`, usage `1` and 64-byte input/output reports, and carries the status query and its reply. `col02` (usage page `0xff00`) carries the base station's own event reports, and isn't used. Both collections match the profile's device path, and the capability check selects `col01`.
+
+Write `01 B0 00 ...` (64 bytes) on `col01`, and read until a report starting `01 B0` arrives, with the same 1.5-second deadline as above. The layout is the Nova Pro's, but the levels are exact percentages:
+
+| Offset | Meaning |
+| --- | --- |
+| 0 | Report id `01` |
+| 1 | Status command `B0` |
+| 6 | Headset battery, 0–100% |
+| 7 | Spare battery in the base station's charger, 0–100% |
+| 15 | Headset state, with the Nova Pro's codes |
+
+Levels above 100 are rejected. The spare is treated as on the Nova Pro: 0 means no battery, 100 means charged, and anything between means charging.
+
+Verified on 2026-11-24 with a `1038:2244` base station. Its `col01` capabilities were read live, and the Rust hardware test returned headset 57% on battery and spare 100% charged. Replies captured by the earlier steelcage project include:
+
+```text
+01 b0 00 00 01 00 59 64 08 00 00 0a 00 00 08 08 03   headset 89%, on battery; spare 100%
+01 b0 00 00 01 00 64 57 08 00 00 0a 00 00 08 08 03   headset 100%, on battery; spare 87%
+01 b0 00 00 01 00 00 64 08 00 00 0a 00 00 04 01 03   headset off (level reads 0); spare 100%
+```
+
+States `08` (on battery) and `01` (off) were observed. `02` (charging) is assumed from the Nova Pro, but hasn't been seen on an Elite. Bytes 14 and 16 aren't decoded.
+
+The Xbox edition of the Nova Pro Wireless (`1038:225e`) isn't a HID device on Windows. It's driven by the Xbox controller driver (`dc1-controller`) with generic USB audio, and has no HID interfaces to query.
 
 ## References
 
