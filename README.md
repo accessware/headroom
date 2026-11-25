@@ -1,6 +1,6 @@
 # Headroom
 
-A small Windows app that reads the battery level directly from a SteelSeries Arctis Nova Pro Wireless base station or a Nova 7X dongle, and reads it to you from anywhere with a hotkey. SteelSeries GG is not required.
+A small Windows app that reads the battery level directly from a SteelSeries Arctis Nova Pro Wireless base station or a Nova 7X or Nova 5X dongle, and reads it to you from anywhere with a hotkey. SteelSeries GG is not required.
 
 ## Use
 
@@ -18,6 +18,7 @@ If the base station or dongle is disconnected, the window shows an error and kee
 
 - Tested: Nova Pro Wireless base station, USB vendor/product `1038:12e0`, on Windows x64, including with GG and Engine stopped.
 - Tested: Arctis Nova 7X, USB vendor/product `1038:2206`. It has no spare battery, so only the headset is shown.
+- Tested: Arctis Nova 5X, USB vendor/product `1038:2253`. It reports the headset battery percentage directly.
 - Recognized but not hardware-tested: Nova Pro Wireless X base station (`1038:12e5`).
 - Other product ids and headset families are not currently supported, including the other Nova 7 and 7X revisions, some of which report a different battery scale. If several supported devices are connected, the first accessible status interface is used.
 

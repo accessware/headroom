@@ -81,6 +81,37 @@ Verified on 2026-11-22 with a `1038:2206` dongle. The reply was `00 b0 03 03 03 
 
 HeadsetControl lists other Nova 7 and 7X product ids (`22a4` with the same discrete scale, `22a5`, `2258`, `229e`, `22ad` and others with a direct 0–100 percentage). Headroom recognizes only `2206`, until those are verified on hardware.
 
+## Arctis Nova 5X
+
+SetupAPI and `HidP_GetCaps` enumerated these top-level collections on the `1038:2253` dongle on Windows x64:
+
+| USB interface | Usage page | Usage | Input bytes | Output bytes |
+| --- | --- | --- | ---: | ---: |
+| `MI_03` | `FFC0` | `0001` | 65 | 65 |
+| `MI_04` | `000C` | `0001` | 5 | 0 |
+| `MI_05` | `FF00` | `0001` | 65 | 65 |
+
+Before the Nova 5X profile was added, the product ID check skipped every collection before reading its capabilities. The new profile selects `MI_03` and checks its usage page, usage, and report lengths. A 65-byte `WriteFile` request starting `00 B0` and padded with zeros received a 65-byte `ReadFile` reply on that collection. Only `MI_03` was queried.
+
+| Windows byte offset | Meaning |
+| --- | --- |
+| 0 | Zero report ID slot |
+| 1 | Status command `B0` |
+| 2 | Connection state, `03` online and `02` offline |
+| 3 | Coarse battery step |
+| 4 | Battery percentage, 0–100 |
+| 5 | Charge state while online, `01` charging and `03` on battery |
+
+| Hardware state | Windows reply prefix | Reading |
+| --- | --- | --- |
+| On, USB charging cable attached | `00 B0 03 02 42 01 64` | 66%, charging |
+| On, after unplugging the cable | `00 B0 03 02 44 03 64` | 68%, on battery |
+| On, later sample | `00 B0 03 02 4B 03 64` | 75%, on battery |
+
+The rest of these replies was zero. HeadsetControl 4.3.0 agreed with both on-battery readings on the same Windows machine. Its Nova 5/5X decoder indexes the HID payload, so its percentage offset 3 is Windows offset 4. The external capture `B0 03 03 61 03 64 64 00` follows the same layout. `61` is 97%, and the adjacent `03` is the coarse step. GG and Engine were stopped during the local readings. [HeadsetControl Nova 5/5X decoder](https://github.com/Sapd/HeadsetControl/blob/4.3.0/lib/devices/steelseries_arctis_nova_5.hpp) · [External capture](https://github.com/CachyOS/distribution/issues/628)
+
+On 2026-11-24, powering off the headset with the dongle still connected changed the 65-byte reply prefix from `00 B0 03 02 0C 03 64` to `00 B0 02 02 0C 03 64`. The dongle kept reporting the last 12% and on-battery codes after disconnecting. Headroom displayed “Off or out of range,” and HeadsetControl 4.3.0 reported `BATTERY_UNAVAILABLE`. Only PID `2253` was tested.
+
 ## References
 
 - [HeadsetControl device protocol](https://github.com/Sapd/HeadsetControl/blob/master/lib/devices/steelseries_arctis_nova_pro_wireless.hpp): product ids, interface number, status request, headset battery scale and state codes.

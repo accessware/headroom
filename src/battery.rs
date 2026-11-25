@@ -2,7 +2,7 @@
 
 use std::fmt::{self, Display, Formatter};
 
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 
 /// How to find, query, and decode one headset family. Reports are handled exactly as Windows
 /// delivers them, so the first byte is the HID report id (zero when the device doesn't use ids).
@@ -54,7 +54,19 @@ pub static NOVA_7X: Profile = Profile {
 	decode: decode_nova_7x,
 };
 
-pub static PROFILES: [&Profile; 2] = [&NOVA_PRO_WIRELESS, &NOVA_7X];
+/// The Nova 5X reports a percentage alongside its coarse battery step.
+pub static NOVA_5X: Profile = Profile {
+	vendor_id: 0x1038,
+	product_ids: &[0x2253],
+	interface: "mi_03",
+	usage_page: 0xffc0,
+	report_len: 65,
+	header: [0x00, 0xb0],
+	min_len: 6,
+	decode: decode_nova_5x,
+};
+
+pub static PROFILES: [&Profile; 3] = [&NOVA_PRO_WIRELESS, &NOVA_7X, &NOVA_5X];
 
 /// The Nova Pro's dock battery scale.
 const DOCK_FULL_STEP: u8 = 8;
@@ -68,8 +80,24 @@ enum State {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+enum Level {
+	Percent(u8),
+	Approximate(u8),
+}
+
+impl Display for Level {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Percent(percent) => write!(f, "{percent}%"),
+			Self::Approximate(100) => f.write_str("100%"),
+			Self::Approximate(percent) => write!(f, "About {percent}%"),
+		}
+	}
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub struct Battery {
-	headset_percent: u8,
+	headset_level: Level,
 	headset_state: State,
 	/// The spare battery's level, for headsets that have a dock.
 	dock_step: Option<u8>,
@@ -88,7 +116,7 @@ fn decode_nova_pro(report: &[u8]) -> Result<Battery> {
 		state => State::Unknown(state),
 	};
 	Ok(Battery {
-		headset_percent: u8::try_from(u16::from(headset_step) * 100 / u16::from(DOCK_FULL_STEP))?,
+		headset_level: Level::Approximate(u8::try_from(u16::from(headset_step) * 100 / u16::from(DOCK_FULL_STEP))?),
 		headset_state,
 		dock_step: Some(dock_step),
 	})
@@ -108,15 +136,37 @@ fn decode_nova_7x(report: &[u8]) -> Result<Battery> {
 		ensure!(step <= FULL_STEP, "Headset returned an unsupported battery level");
 	}
 	let headset_percent = u8::try_from(u16::from(step.min(FULL_STEP)) * 100 / u16::from(FULL_STEP))?;
-	Ok(Battery { headset_percent, headset_state, dock_step: None })
+	Ok(Battery { headset_level: Level::Approximate(headset_percent), headset_state, dock_step: None })
+}
+
+fn decode_nova_5x(report: &[u8]) -> Result<Battery> {
+	// Windows prepends a zero report ID to the payload. Byte 3 is the coarse step.
+	let (connection, percent, charge) = (report[2], report[4], report[5]);
+	let headset_state = match connection {
+		0x02 => State::Offline,
+		0x03 => match charge {
+			0x01 => State::Charging,
+			0x03 => State::OnBattery,
+			value => bail!("Nova 5X returned an unknown charging state (0x{value:02x})"),
+		},
+		value => State::Unknown(value),
+	};
+	let headset_level = match headset_state {
+		State::Charging | State::OnBattery => {
+			ensure!(percent <= 100, "Nova 5X returned an invalid battery percentage ({percent})");
+			Level::Percent(percent)
+		}
+		State::Offline | State::Unknown(_) => Level::Percent(0),
+	};
+	Ok(Battery { headset_level, headset_state, dock_step: None })
 }
 
 impl Battery {
 	pub fn headset(&self) -> String {
 		match self.headset_state {
 			State::Offline => "Off or out of range".into(),
-			State::Charging => format!("{} — Charging", percentage(self.headset_percent)),
-			State::OnBattery => format!("{} — On battery", percentage(self.headset_percent)),
+			State::Charging => format!("{} — Charging", self.headset_level),
+			State::OnBattery => format!("{} — On battery", self.headset_level),
 			State::Unknown(state) => format!("Unavailable — unknown connection state (0x{state:02x})"),
 		}
 	}
@@ -129,7 +179,7 @@ impl Battery {
 			DOCK_FULL_STEP => "100% — Charged".into(),
 			step => format!(
 				"{} — Charging",
-				percentage(u8::try_from(u16::from(step) * 100 / u16::from(DOCK_FULL_STEP)).unwrap_or(100))
+				Level::Approximate(u8::try_from(u16::from(step) * 100 / u16::from(DOCK_FULL_STEP)).unwrap_or(100))
 			),
 		})
 	}
@@ -145,13 +195,9 @@ impl Display for Battery {
 	}
 }
 
-fn percentage(percent: u8) -> String {
-	if percent == 100 { "100%".into() } else { format!("About {percent}%") }
-}
-
 #[cfg(test)]
 mod tests {
-	use super::{NOVA_7X, NOVA_PRO_WIRELESS};
+	use super::{NOVA_5X, NOVA_7X, NOVA_PRO_WIRELESS};
 
 	fn nova_pro(headset: u8, dock: u8, state: u8) -> [u8; 64] {
 		let mut bytes = [0; 64];
@@ -272,5 +318,35 @@ mod tests {
 		bytes[0] = 0;
 		bytes[1] = 0x20;
 		assert!(NOVA_7X.decode(&bytes).is_err());
+	}
+
+	#[test]
+	fn decodes_live_nova_5x_reports() {
+		let mut report = [0; 65];
+		for (prefix, expected) in [
+			([0x00, 0xb0, 0x03, 0x02, 0x42, 0x01, 0x64], "Headset: 66% — Charging"),
+			([0x00, 0xb0, 0x03, 0x02, 0x44, 0x03, 0x64], "Headset: 68% — On battery"),
+			([0x00, 0xb0, 0x02, 0x02, 0x0c, 0x03, 0x64], "Headset: Off or out of range"),
+		] {
+			report[..prefix.len()].copy_from_slice(&prefix);
+			assert_eq!(NOVA_5X.decode(&report).unwrap().to_string(), expected);
+		}
+	}
+
+	#[test]
+	fn rejects_invalid_nova_5x_replies() {
+		let mut report = [0x00, 0xb0, 0x03, 0x02, 68, 0x03];
+		assert!(NOVA_5X.decode(&report[..5]).is_err());
+		report[4] = 101;
+		assert!(NOVA_5X.decode(&report).is_err());
+		report[4] = 68;
+		report[5] = 0xff;
+		assert!(NOVA_5X.decode(&report).is_err());
+	}
+
+	#[test]
+	fn offline_nova_5x_ignores_cached_battery_fields() {
+		let report = [0x00, 0xb0, 0x02, 0xff, 0xff, 0xff];
+		assert_eq!(NOVA_5X.decode(&report).unwrap().headset(), "Off or out of range");
 	}
 }

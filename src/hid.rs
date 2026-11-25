@@ -68,13 +68,15 @@ fn open(path: &[u16], access: u32, flags: u32) -> Result<OwnedHandle> {
 	let handle = unsafe {
 		CreateFileW(path.as_ptr(), access, FILE_SHARE_READ | FILE_SHARE_WRITE, null(), OPEN_EXISTING, flags, null_mut())
 	};
-	ensure!(handle != INVALID_HANDLE_VALUE, "Could not open the headset: {}", Error::last_os_error());
+	if handle == INVALID_HANDLE_VALUE {
+		return Err(Error::last_os_error().into());
+	}
 	// SAFETY: CreateFileW succeeded and ownership is transferred exactly once.
 	Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
-fn is_status_interface(path: &[u16], profile: &Profile) -> Result<bool> {
-	let handle = open(path, 0, 0)?;
+fn check_status_interface(path: &[u16], profile: &Profile) -> Result<()> {
+	let handle = open(path, 0, 0).context("Could not open the HID collection to inspect it")?;
 	// SAFETY: these are plain Windows output structures whose fields accept zero initialization.
 	let mut attributes: HIDD_ATTRIBUTES = unsafe { zeroed() };
 	attributes.Size = u32::try_from(size_of::<HIDD_ATTRIBUTES>())?;
@@ -82,9 +84,10 @@ fn is_status_interface(path: &[u16], profile: &Profile) -> Result<bool> {
 	if !unsafe { HidD_GetAttributes(handle.as_raw_handle(), &raw mut attributes) } {
 		return Err(Error::last_os_error()).context("Could not read HID device attributes");
 	}
-	if attributes.VendorID != profile.vendor_id || !profile.product_ids.contains(&attributes.ProductID) {
-		return Ok(false);
-	}
+	ensure!(
+		attributes.VendorID == profile.vendor_id && profile.product_ids.contains(&attributes.ProductID),
+		"HID collection reported unexpected vendor/product IDs"
+	);
 	let mut data = 0;
 	// SAFETY: the handle is open, and data points to writable storage.
 	if !unsafe { HidD_GetPreparsedData(handle.as_raw_handle(), &raw mut data) } {
@@ -97,10 +100,18 @@ fn is_status_interface(path: &[u16], profile: &Profile) -> Result<bool> {
 	let result = unsafe { HidP_GetCaps(data.0, &raw mut caps) };
 	ensure!(result == HIDP_STATUS_SUCCESS, "Could not decode HID capabilities");
 	let report_len = u16::try_from(profile.report_len)?;
-	Ok(caps.UsagePage == profile.usage_page
-		&& caps.Usage == 1
-		&& caps.InputReportByteLength == report_len
-		&& caps.OutputReportByteLength == report_len)
+	ensure!(
+		caps.UsagePage == profile.usage_page
+			&& caps.Usage == 1
+			&& caps.InputReportByteLength == report_len
+			&& caps.OutputReportByteLength == report_len,
+		"HID collection has unexpected capabilities (usage page 0x{:04x}, usage 0x{:04x}, input {} bytes, output {} bytes)",
+		caps.UsagePage,
+		caps.Usage,
+		caps.InputReportByteLength,
+		caps.OutputReportByteLength
+	);
+	Ok(())
 }
 
 fn interface_path(set: &DeviceSet, interface: &SP_DEVICE_INTERFACE_DATA) -> Result<Vec<u16>> {
@@ -162,16 +173,19 @@ fn find_headset() -> Result<(OwnedHandle, &'static Profile)> {
 		let Some(profile) = candidate_profile(&name) else {
 			continue;
 		};
-		match is_status_interface(&path, profile) {
-			Ok(true) => return Ok((open(&path, GENERIC_READ | GENERIC_WRITE, FILE_FLAG_OVERLAPPED)?, profile)),
-			Ok(false) => (),
+		match check_status_interface(&path, profile) {
+			Ok(()) => {
+				let handle = open(&path, GENERIC_READ | GENERIC_WRITE, FILE_FLAG_OVERLAPPED)
+					.context("Could not open the headset status interface for read/write")?;
+				return Ok((handle, profile));
+			}
 			Err(error) => last_error = Some(error),
 		}
 	}
 	if let Some(error) = last_error {
 		return Err(error);
 	}
-	bail!("No supported SteelSeries headset is connected")
+	bail!("Could not discover a supported SteelSeries headset status interface")
 }
 
 fn transfer(handle: &OwnedHandle, buffer: &mut [u8], write: bool, timeout: Duration) -> Result<usize> {
@@ -210,7 +224,7 @@ fn transfer(handle: &OwnedHandle, buffer: &mut [u8], write: bool, timeout: Durat
 				GetOverlappedResult(handle.as_raw_handle(), &raw const operation, &raw mut count, 1);
 			}
 			if wait == WAIT_TIMEOUT {
-				bail!("Headset status request timed out");
+				bail!("HID transfer timed out");
 			}
 			return Err(error).context("Could not wait for the HID transfer");
 		}
@@ -227,17 +241,18 @@ pub fn read_battery() -> Result<Battery> {
 	let mut request = [0; MAX_REPORT_LEN];
 	let request = &mut request[..profile.report_len];
 	request[..2].copy_from_slice(&profile.header);
-	ensure!(transfer(&handle, request, true, IO_TIMEOUT)? == profile.report_len, "Incomplete HID status request");
+	let written = transfer(&handle, request, true, IO_TIMEOUT).context("Could not write the HID status request")?;
+	ensure!(written == profile.report_len, "Incomplete HID status write ({written} of {} bytes)", profile.report_len);
 	let deadline = Instant::now() + IO_TIMEOUT;
 	loop {
 		let remaining = deadline.saturating_duration_since(Instant::now());
-		ensure!(!remaining.is_zero(), "Headset did not return a matching status report");
+		ensure!(!remaining.is_zero(), "Timed out reading a matching HID status reply");
 		let mut report = [0; MAX_REPORT_LEN];
 		let report = &mut report[..profile.report_len];
-		let length = transfer(&handle, report, false, remaining)?;
-		ensure!(length <= report.len(), "Invalid HID report length");
+		let length = transfer(&handle, report, false, remaining).context("Could not read the HID status reply")?;
+		ensure!(length <= report.len(), "Invalid HID status read length ({length} bytes)");
 		if report[..length].starts_with(&profile.header) {
-			return profile.decode(&report[..length]);
+			return profile.decode(&report[..length]).context("Could not decode the HID status reply");
 		}
 	}
 }
@@ -247,7 +262,7 @@ mod tests {
 	use std::ptr;
 
 	use super::{candidate_profile, read_battery};
-	use crate::battery::{NOVA_7X, NOVA_PRO_WIRELESS, Profile};
+	use crate::battery::{NOVA_5X, NOVA_7X, NOVA_PRO_WIRELESS, Profile};
 
 	fn matches(path: &str, expected: Option<&Profile>) -> bool {
 		match (candidate_profile(path), expected) {
@@ -261,6 +276,8 @@ mod tests {
 		assert!(matches(r"\\?\hid#vid_1038&pid_12e0&mi_04#7&1a2b&0&0000#{4d1e55b2}", Some(&NOVA_PRO_WIRELESS)));
 		assert!(matches(r"\\?\hid#vid_1038&pid_12e5&mi_04#7&1a2b&0&0000#{4d1e55b2}", Some(&NOVA_PRO_WIRELESS)));
 		assert!(matches(r"\\?\hid#vid_1038&pid_2206&mi_03#7&1a2b&0&0000#{4d1e55b2}", Some(&NOVA_7X)));
+		assert!(matches(r"\\?\hid#vid_1038&pid_2253&mi_03#7&1a2b&0&0000#{4d1e55b2}", Some(&NOVA_5X)));
+		assert!(matches(r"\\?\hid#vid_1038&pid_2253&mi_05#7&1a2b&0&0000#{4d1e55b2}", None));
 		assert!(matches(r"\\?\hid#vid_1038&pid_12e0&mi_03#7&1a2b&0&0000#{4d1e55b2}", None));
 		assert!(matches(r"\\?\hid#vid_1038&pid_2206&mi_04#7&1a2b&0&0000#{4d1e55b2}", None));
 		assert!(matches(r"\\?\hid#vid_1038&pid_1234&mi_04#7&1a2b&0&0000#{4d1e55b2}", None));
