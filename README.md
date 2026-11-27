@@ -1,6 +1,6 @@
 # Headroom
 
-A small Windows app that reads the battery level directly from a SteelSeries Arctis Nova Pro Wireless or Nova Elite base station, or a Nova 7X dongle, and reads it to you from anywhere with a hotkey. SteelSeries GG is not required.
+A small Windows app that reads the battery level directly from a SteelSeries Arctis Nova Pro Wireless, Nova Elite or Nova 5 base station, or a Nova 7X dongle, and reads it to you from anywhere with a hotkey. SteelSeries GG is not required.
 
 ## Use
 
@@ -19,11 +19,12 @@ If the base station or dongle is disconnected, the window shows an error and kee
 - Tested: Nova Pro Wireless base station, USB vendor/product `1038:12e0`, on Windows x64, including with GG and Engine stopped.
 - Tested: Arctis Nova 7X, USB vendor/product `1038:2206`. It has no spare battery, so only the headset is shown.
 - Tested: Arctis Nova Elite base station, USB vendor/product `1038:2244`.
-- Recognized but not hardware-tested: Nova Pro Wireless X base station (`1038:12e5`), and Nova Elite Sage & Gold (`1038:2270`).
+- Tested: Arctis Nova 5 base station, USB vendor/product `1038:2232`. It has no spare battery, so only the headset is shown.
+- Recognized but not hardware-tested: Nova Pro Wireless X base station (`1038:12e5`), Nova Elite Sage & Gold (`1038:2270`), and Nova 5X base station (`1038:2253`).
 - Not supported: the Xbox edition of the Nova Pro Wireless (`1038:225e`). Windows runs it as an Xbox controller rather than a HID device, so Headroom can't query it.
 - Other product ids and headset families are not currently supported, including the other Nova 7 and 7X revisions, some of which report a different battery scale. If several supported devices are connected, the first accessible status interface is used.
 
-The Nova Pro base station reports battery levels in steps of 12.5%, and the Nova 7X in steps of 25%, rather than exact percentages. Intermediate values are labeled “About”; 100% means the highest reported step. The Nova Elite reports exact percentages, which are shown as they are. The Nova Pro dock's charging/charged state is inferred from its level. A zero dock reading is treated as an empty slot, but a very low battery may be indistinguishable from an absent one.
+The Nova Pro base station reports battery levels in steps of 12.5%, and the Nova 7X in steps of 25%, rather than exact percentages. Intermediate values are labeled “About”; 100% means the highest reported step. The Nova Elite and Nova 5 report exact percentages, which are shown as they are. The Nova Pro dock's charging/charged state is inferred from its level. A zero dock reading is treated as an empty slot, but a very low battery may be indistinguishable from an absent one.
 
 ## Build
 
