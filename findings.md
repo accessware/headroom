@@ -2,7 +2,7 @@
 
 Headroom queries the base station or dongle over Windows HID. It does not need SteelSeries GG, Engine, a local HTTP API, or a custom USB driver.
 
-Each supported headset family is a profile in `src/battery.rs`: its product ids, USB interface, report size, query header, and decoder. The sections below describe the Nova Pro Wireless; [the Nova 7X](#arctis-nova-7x) and [the Nova Elite](#arctis-nova-elite) follow them.
+Each supported headset family is a profile in `src/battery.rs`: its product ids, USB interface, report size, query header, and decoder. The sections below describe the Nova Pro Wireless; [the Nova 7X](#arctis-nova-7x), [the Nova Elite](#arctis-nova-elite) and [the Nova 5](#arctis-nova-5) follow them.
 
 ## Find the status interface
 
@@ -107,12 +107,32 @@ Verified on 2026-11-24 with a `1038:2244` base station. Its `col01` capabilities
 
 States `08` (on battery) and `01` (off) were observed. `02` (charging) is assumed from the Nova Pro, but hasn't been seen on an Elite. Bytes 14 and 16 aren't decoded.
 
+## Arctis Nova 5
+
+Vendor `1038`, product `2232` (`2253` for the Nova 5X, untested), USB interface `03`, usage page `0xffc0`, usage `1`. As on the Nova 7X, reports are 65 bytes with a report id of `00`. Interface `05` has a second vendor collection (usage page `0xff00`), which isn't used.
+
+Write `00 B0 00 ...` (65 bytes) and read until a report starting `00 B0` arrives, with the same 1.5-second deadline as above. Offsets are zero-based in the 65-byte report, one more than in HeadsetControl and the Linux driver, which count from after the report id:
+
+| Offset | Meaning |
+| --- | --- |
+| 0 | Report id `00` |
+| 1 | Status command `B0` |
+| 2 | Connection: `02` offline, `03` connected |
+| 4 | Headset battery, 0–100% |
+| 5 | Charge state: `01` charging, `03` on battery |
+
+An offline headset's level isn't shown or validated. Otherwise levels above 100 are rejected, and connection or charge codes other than those listed are displayed as unavailable with their raw code. Byte 3 isn't decoded. There is no spare battery.
+
+Verified on 2026-11-27 with a `1038:2232` base station. The collection's capabilities were read live (65-byte input and output reports), and the reply was `00 b0 03 03 2f 03 00 ...`, decoded as 47% on battery. Charging and offline have parser coverage only. They come from HeadsetControl and the Linux driver, which both treat connection `02` as offline and charge state `01` as charging.
+
 The Xbox edition of the Nova Pro Wireless (`1038:225e`) isn't a HID device on Windows. It's driven by the Xbox controller driver (`dc1-controller`) with generic USB audio, and has no HID interfaces to query.
 
 ## References
 
 - [HeadsetControl device protocol](https://github.com/Sapd/HeadsetControl/blob/master/lib/devices/steelseries_arctis_nova_pro_wireless.hpp): product ids, interface number, status request, headset battery scale and state codes.
 - [HeadsetControl Nova 7 protocol](https://github.com/Sapd/HeadsetControl/blob/master/lib/devices/steelseries_arctis_nova_7.hpp): the Nova 7 and 7X product ids, interface number, status request, and battery scales.
+- [HeadsetControl Nova 5 protocol](https://github.com/Sapd/HeadsetControl/blob/master/lib/devices/steelseries_arctis_nova_5.hpp): the Nova 5 and 5X product ids, interface number, status request, battery byte and state codes.
+- [Linux SteelSeries Arctis HID driver patch](https://lkml.iu.edu/2602.3/08370.html): an independent Nova 5 status parser with the same offsets and codes.
 - [HeadsetBatteryTray protocol notes](https://github.com/Teknesyum/HeadsetBatteryTray#how-it-works): Windows collection selection and report format.
 - [Rigstats control architecture notes](https://github.com/dvalfrid/rigstats/blob/main/docs/control-architecture.md): spare battery byte and scale, marked unverified there.
 

@@ -247,7 +247,7 @@ mod tests {
 	use std::ptr;
 
 	use super::{candidate_profile, read_battery};
-	use crate::battery::{NOVA_7X, NOVA_ELITE, NOVA_PRO_WIRELESS, Profile};
+	use crate::battery::{NOVA_5, NOVA_7X, NOVA_ELITE, NOVA_PRO_WIRELESS, Profile};
 
 	fn matches(path: &str, expected: Option<&Profile>) -> bool {
 		match (candidate_profile(path), expected) {
@@ -269,6 +269,10 @@ mod tests {
 		assert!(matches(r"\\?\hid#vid_1038&pid_2244&mi_03&col02#9&1791&0&0001#{4d1e55b2}", Some(&NOVA_ELITE)));
 		assert!(matches(r"\\?\hid#vid_1038&pid_2270&mi_03&col01#9&1791&0&0000#{4d1e55b2}", Some(&NOVA_ELITE)));
 		assert!(matches(r"\\?\hid#vid_1038&pid_2244&mi_04#9&3b68&0&0000#{4d1e55b2}", None));
+		assert!(matches(r"\\?\hid#vid_1038&pid_2232&mi_03#a&1db2bf38&0&0000#{4d1e55b2}", Some(&NOVA_5)));
+		assert!(matches(r"\\?\hid#vid_1038&pid_2253&mi_03#a&1db2bf38&0&0000#{4d1e55b2}", Some(&NOVA_5)));
+		// The Nova 5's other vendor collection, on interface 05 (usage page 0xff00), isn't used.
+		assert!(matches(r"\\?\hid#vid_1038&pid_2232&mi_05#a&29c670b5&0&0000#{4d1e55b2}", None));
 	}
 
 	#[test]

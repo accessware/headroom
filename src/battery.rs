@@ -67,7 +67,20 @@ pub static NOVA_ELITE: Profile = Profile {
 	decode: decode_nova_elite,
 };
 
-pub static PROFILES: [&Profile; 3] = [&NOVA_PRO_WIRELESS, &NOVA_7X, &NOVA_ELITE];
+/// The Nova 5 base station reports only the headset, as an exact percentage, in reports laid out
+/// like the Nova 7X's.
+pub static NOVA_5: Profile = Profile {
+	vendor_id: 0x1038,
+	product_ids: &[0x2232, 0x2253],
+	interface: "mi_03",
+	usage_page: 0xffc0,
+	report_len: 65,
+	header: [0x00, 0xb0],
+	min_len: 6,
+	decode: decode_nova_5,
+};
+
+pub static PROFILES: [&Profile; 4] = [&NOVA_PRO_WIRELESS, &NOVA_7X, &NOVA_ELITE, &NOVA_5];
 
 /// The Nova Pro's battery scale, for the headset and its dock.
 const NOVA_PRO_FULL_STEP: u8 = 8;
@@ -151,6 +164,21 @@ fn decode_nova_7x(report: &[u8]) -> Result<Battery> {
 	})
 }
 
+fn decode_nova_5(report: &[u8]) -> Result<Battery> {
+	let (connection, percent, charge) = (report[2], report[4], report[5]);
+	let headset_state = match (connection, charge) {
+		(0x02, _) => State::Offline,
+		(0x03, 0x01) => State::Charging,
+		(0x03, 0x03) => State::OnBattery,
+		(0x03, state) | (state, _) => State::Unknown(state),
+	};
+	// An offline headset's level is stale, so it isn't checked or shown.
+	if headset_state != State::Offline {
+		ensure!(percent <= 100, "Headset returned an unsupported battery level");
+	}
+	Ok(Battery { headset_percent: percent.min(100), headset_state, dock_percent: None, exact: true })
+}
+
 impl Battery {
 	pub fn headset(&self) -> String {
 		match self.headset_state {
@@ -189,7 +217,7 @@ impl Display for Battery {
 
 #[cfg(test)]
 mod tests {
-	use super::{NOVA_7X, NOVA_ELITE, NOVA_PRO_WIRELESS};
+	use super::{NOVA_5, NOVA_7X, NOVA_ELITE, NOVA_PRO_WIRELESS};
 
 	fn nova_pro(headset: u8, dock: u8, state: u8) -> [u8; 64] {
 		let mut bytes = [0; 64];
@@ -391,5 +419,55 @@ mod tests {
 	#[test]
 	fn unknown_nova_elite_state_is_not_presented_as_a_connected_headset() {
 		assert!(NOVA_ELITE.decode(&nova_elite(100, 100, 0xff)).unwrap().headset().contains("unknown connection state"));
+	}
+
+	fn nova_5(connection: u8, percent: u8, charge: u8) -> [u8; 65] {
+		let mut bytes = [0; 65];
+		bytes[..2].copy_from_slice(&NOVA_5.header);
+		bytes[2] = connection;
+		bytes[3] = 0x03;
+		bytes[4] = percent;
+		bytes[5] = charge;
+		bytes
+	}
+
+	#[test]
+	fn decodes_the_live_nova_5_report() {
+		// A reply from a Nova 5 (1038:2232) at 47%, not charging, with a leading report id of zero.
+		let mut bytes = [0; 65];
+		bytes[..6].copy_from_slice(&[0x00, 0xb0, 0x03, 0x03, 0x2f, 0x03]);
+		assert_eq!(NOVA_5.decode(&bytes).unwrap().to_string(), "Headset: 47% — On battery");
+	}
+
+	#[test]
+	fn nova_5_levels_are_exact_and_validated() {
+		for percent in 0..=100 {
+			assert_eq!(NOVA_5.decode(&nova_5(3, percent, 3)).unwrap().headset(), format!("{percent}% — On battery"));
+		}
+		for percent in 101..=u8::MAX {
+			assert!(NOVA_5.decode(&nova_5(3, percent, 3)).is_err());
+		}
+	}
+
+	#[test]
+	fn nova_5_states() {
+		assert_eq!(NOVA_5.decode(&nova_5(2, 0xff, 0)).unwrap().headset(), "Off or out of range");
+		assert_eq!(NOVA_5.decode(&nova_5(3, 60, 1)).unwrap().headset(), "60% — Charging");
+		assert!(NOVA_5.decode(&nova_5(3, 60, 9)).unwrap().headset().contains("unknown connection state (0x09)"));
+		assert!(NOVA_5.decode(&nova_5(7, 60, 3)).unwrap().headset().contains("unknown connection state (0x07)"));
+		assert_eq!(NOVA_5.decode(&nova_5(3, 60, 3)).unwrap().dock(), None);
+	}
+
+	#[test]
+	fn rejects_truncated_and_unrelated_nova_5_reports() {
+		for length in 0..6 {
+			assert!(NOVA_5.decode(&nova_5(3, 50, 3)[..length]).is_err());
+		}
+		let mut bytes = nova_5(3, 50, 3);
+		bytes[0] = 1;
+		assert!(NOVA_5.decode(&bytes).is_err());
+		bytes[0] = 0;
+		bytes[1] = 0x20;
+		assert!(NOVA_5.decode(&bytes).is_err());
 	}
 }
